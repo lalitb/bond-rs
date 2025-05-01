@@ -1,0 +1,195 @@
+#include "bond_ffi.h"
+
+// Suppress Bond third-party warnings: -Wignored-qualifiers, -Wdeprecated-copy (GCC/Clang)
+// See: Bond may use deprecated patterns or produce noisy warnings in its headers.
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wignored-qualifiers" // Ignore qualifiers on cast result (Bond internal)
+#pragma GCC diagnostic ignored "-Wdeprecated-copy"    // Ignore deprecated copy assignment (Bond internal)
+#endif
+
+// Suppress Bond third-party warnings on MSVC: 4267 (size_t to int), 4244 (type conversion), 4996 (deprecated)
+// See: Bond may use deprecated or "unsafe" patterns in its headers which are safe to ignore in your code.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4267) // Conversion from 'size_t' to 'type', possible loss of data (Bond internal)
+#pragma warning(disable: 4244) // Conversion from 'type1' to 'type2', possible loss of data (Bond internal)
+#pragma warning(disable: 4996) // Deprecated functions or unsafe functions (Bond internal)
+#endif
+
+#include <bond/core/bond.h>
+#include <bond/protocol/simple_binary.h>
+#include <bond/core/schema.h>
+
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+#include <cstring>
+#include <vector>
+#include <string>
+#include <cstdlib>
+#include <stdexcept>
+#include <iostream>
+
+namespace {
+
+struct Field {
+    std::string name;
+    uint8_t type;
+    uint16_t id;
+};
+
+std::vector<Field> parse_schema(const uint8_t* ptr, size_t len, size_t& out_count) {
+    if (len < 2) throw std::runtime_error("schema too short");
+    out_count = ptr[0] | (ptr[1] << 8);
+    std::vector<Field> fields;
+    ptr += 2;
+    len -= 2;
+    for (size_t i = 0; i < static_cast<size_t>(out_count); ++i){
+        if (len < 1) throw std::runtime_error("not enough data for name_len");
+        uint8_t name_len = *ptr++;
+        len--;
+        if (len < size_t(name_len) + 1 + 2) throw std::runtime_error("not enough data for field");
+        std::string name(reinterpret_cast<const char*>(ptr), name_len);
+        ptr += name_len;
+        len -= name_len;
+        uint8_t type = *ptr++;
+        len--;
+        uint16_t id = ptr[0] | (ptr[1] << 8);
+        ptr += 2;
+        len -= 2;
+        fields.push_back({name, type, id});
+    }
+    return fields;
+}
+
+void* buffer_to_bytes(bond::OutputBuffer& buf, size_t* out_len) {
+    const bond::blob& blob = buf.GetBuffer();
+    size_t total_size = blob.size();
+    void* out = std::malloc(total_size);
+    if (!out && total_size) throw std::bad_alloc();
+    std::memcpy(out, blob.content(), total_size);
+    *out_len = total_size;
+    return out;
+}
+
+} // namespace
+
+extern "C" void* bond_ffi_marshal_schema(const void* schema_buf, size_t schema_len, size_t* out_len) {
+    try {
+        const uint8_t* ptr = reinterpret_cast<const uint8_t*>(schema_buf);
+        size_t field_count;
+        auto fields = parse_schema(ptr, schema_len, field_count);
+
+        bond::StructDef struct_def;
+        struct_def.metadata.name = "MdsContainer";
+        struct_def.metadata.qualified_name = "testNamespace.MdsContainer";
+        struct_def.metadata.attributes = {};
+        struct_def.metadata.modifier = bond::Modifier::Optional;
+        
+        for (const auto& f : fields) {
+            bond::FieldDef fd;
+            fd.id = f.id;
+            fd.metadata.name = f.name;
+            fd.type.bonded_type = false;
+            fd.type.id = static_cast<bond::BondDataType>(f.type);
+            struct_def.fields.push_back(std::move(fd));
+        }
+
+        bond::SchemaDef schemaDef;
+        schemaDef.root.id = bond::BT_STRUCT;
+        schemaDef.root.bonded_type = false;
+        schemaDef.structs.push_back(struct_def);
+
+        bond::OutputBuffer buf;
+        bond::SimpleBinaryWriter<bond::OutputBuffer> writer(buf);
+        bond::Marshal(schemaDef, writer);
+
+        return buffer_to_bytes(buf, out_len);
+    } catch (...) {
+        *out_len = 0;
+        return nullptr;
+    }
+}
+
+extern "C" void* bond_ffi_marshal_row(const void* schema_bytes, size_t schema_len,
+                                      const void* row_buf, size_t row_len,
+                                      size_t* out_len) {
+    try {
+        std::cout << "Marshalling row with schema length: " << schema_len << std::endl;
+        bond::InputBuffer input(reinterpret_cast<const char*>(schema_bytes), schema_len);
+        bond::SchemaDef schemaDef = bond::Unmarshal<bond::SchemaDef>(input);
+        if (schemaDef.structs.empty()) throw std::runtime_error("no struct in schema");
+
+        const auto& fields = schemaDef.structs[0].fields;
+        const uint8_t* ptr = reinterpret_cast<const uint8_t*>(row_buf);
+        size_t remain = row_len;
+
+        bond::OutputBuffer buf;
+        bond::SimpleBinaryWriter<bond::OutputBuffer> writer(buf);
+        writer.WriteStructBegin(schemaDef.structs[0].metadata, false);
+
+        for (const auto& f : fields) {
+            std::cout << "Processing field: " << f.metadata.name << "type" << f.type.id << std::endl;
+            switch (f.type.id) {
+                case bond::BT_DOUBLE: {
+                    std::cout << "Field is double remain:" <<  remain << std::endl;
+                    if (remain < 8) throw std::runtime_error("row too short");
+                    double v;
+                    std::memcpy(&v, ptr, 8);
+                    writer.Write(v);
+                    ptr += 8; remain -= 8;
+                    break;
+                }
+                case bond::BT_INT32: {
+                    std::cout << "Field is int32 remain:" <<  remain << std::endl;
+                    if (remain < 4) throw std::runtime_error("row too short");
+                    int32_t v;
+                    std::memcpy(&v, ptr, 4);
+                    writer.Write(v);
+                    ptr += 4; remain -= 4;
+                    break;
+                }
+                case bond::BT_FLOAT: {
+                    std::cout << "Field is float remain:" << remain << std::endl;
+                    if (remain < 4) throw std::runtime_error("row too short for float");
+                    float v;
+                    std::memcpy(&v, ptr, 4);
+                    writer.Write(v);
+                    ptr += 4; remain -= 4;
+                    break;
+                }
+                case bond::BT_STRING: {
+                    std::cout << "Field is string remain:" <<  remain << std::endl;
+                    if (remain < 2) throw std::runtime_error("row too short for string len");
+                    uint16_t slen = ptr[0] | (ptr[1] << 8);
+                    ptr += 2; remain -= 2;
+                    if (remain < slen) throw std::runtime_error("row too short for string bytes");
+                    std::string s(reinterpret_cast<const char*>(ptr), slen);
+                    writer.Write(s);
+                    ptr += slen; remain -= slen;
+                    break;
+                }
+                // Extend here for more Bond types as needed
+                default: {
+                    std::cout << "Unsupported type id: " << static_cast<int>(f.type.id) << std::endl;
+                    throw std::runtime_error("unsupported type id");
+                }
+            }
+        }
+        writer.WriteStructEnd();
+
+        return buffer_to_bytes(buf, out_len);
+    } catch (...) {
+        *out_len = 0;
+        return nullptr;
+    }
+}
+
+extern "C" void bond_ffi_free(void* ptr) {
+    std::free(ptr);
+}

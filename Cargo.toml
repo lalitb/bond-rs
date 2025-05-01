@@ -1,0 +1,17 @@
+[package]
+name = "bond-rs"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Rust FFI wrapper for Microsoft Bond serialization via C++"
+repository = "https://github.com/lalitb/bond-rs"
+
+[build-dependencies]
+cc = "1.0"
+
+[dev-dependencies]
+lz4_flex = "0.11.0"
+
+[dependencies]
+md5 = "0.7.0"
+# No extra dependencies needed for FFI itself
