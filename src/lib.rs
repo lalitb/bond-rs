@@ -4,13 +4,22 @@ pub mod encoder;
 
 use std::slice;
 
-
 pub struct BondSchema {
     bytes: Vec<u8>,
+    fields: Vec<(String, u8, u16)>, // (name, type, id)
 }
 
 pub struct BondRow {
     bytes: Vec<u8>,
+}
+
+impl Clone for BondSchema {
+    fn clone(&self) -> Self {
+        BondSchema {
+            bytes: self.bytes.clone(),
+            fields: self.fields.clone(),
+        }
+    }
 }
 
 impl BondSchema {
@@ -34,7 +43,8 @@ impl BondSchema {
             ffi::bond_ffi_free(ptr);
             v
         };
-        BondSchema { bytes }
+        let fields = fields.iter().map(|(name, typ, id)| (name.to_string(), *typ, *id)).collect();
+        BondSchema { bytes, fields }
     }
 
     pub fn as_bytes(&self) -> &[u8] {

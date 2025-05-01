@@ -104,6 +104,12 @@ impl CentralBondBlob {
 mod tests {
     use super::*;
     use crate::{BondSchema, BondRow};
+    use md5;
+
+    //Helper to calculate MD5 hash, returns [u8;16]
+    fn md5_bytes(data: &[u8]) -> [u8; 16] {
+        md5::compute(data).0
+    }
 
     #[test]
     fn test_central_bond_blob_creation() {

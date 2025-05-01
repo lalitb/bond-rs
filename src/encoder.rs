@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use crate::{BondSchema, BondRow};
 use crate::central_bond::{CentralBondBlob, CentralSchemaEntry, CentralEventEntry};
 
-use std::fs::File;
-
 /// Supported value types for the Bond encoder
 #[derive(Debug, Clone)]
 pub enum BondValue {
@@ -11,17 +9,21 @@ pub enum BondValue {
     Int32(i32),
     String(String),
     Double(f64),
+    WString(String), // UTF-16LE encoded
     // Add more types as needed
 }
 
 impl BondValue {
     /// Get the Bond type ID for this value
+    /// These values map to specific data types: BT_BOOL(2), BT_FLOAT(7), BT_DOUBLE(8), 
+    /// BT_STRING(9), BT_WSTRING(18), BT_INT32(16), BT_INT64(17)
     fn bond_type_id(&self) -> u8 {
         match self {
-            BondValue::Float(_) => 8,    // BT_FLOAT
+            BondValue::Float(_) => 7,    // BT_DOUBLE
+            BondValue::Double(_) => 8,   // BT_DOUBLE
             BondValue::Int32(_) => 16,   // BT_INT32
             BondValue::String(_) => 9,   // BT_STRING
-            BondValue::Double(_) => 7,   // BT_DOUBLE
+            BondValue::WString(_) => 18, // BT_WSTRING
             // Add more mappings as needed
         }
     }
@@ -36,6 +38,18 @@ impl BondValue {
                 buffer.extend_from_slice(v.as_bytes());
             },
             BondValue::Double(v) => buffer.extend_from_slice(&v.to_le_bytes()),
+            BondValue::WString(v) => {
+                // Convert UTF-8 to UTF-16
+                let utf16: Vec<u16> = v.encode_utf16().collect();
+                
+                // Write length of UTF-16 string (in code units, not bytes)
+                buffer.extend_from_slice(&(utf16.len() as u16).to_le_bytes());
+                
+                // Write UTF-16LE bytes
+                for code_unit in utf16 {
+                    buffer.extend_from_slice(&code_unit.to_le_bytes());
+                }
+            },
             // Add more serialization as needed
         }
     }
@@ -164,7 +178,7 @@ impl BondEncoder {
         
         // Write values in schema order
         for (field_name, _) in ordered_fields {
-            if let Some(value) = data.get(*field_name) {
+            if let Some(value) = data.get(field_name) {
                 value.write_to_buffer(&mut buffer);
             } else {
                 // Skip missing fields
@@ -178,12 +192,11 @@ impl BondEncoder {
     /// Extract field ordering from schema
     /// Returns a map of field name to field order
     fn extract_field_ordering_from_schema(&self, schema: &BondSchema) -> HashMap<String, u16> {
-        // This is a simplified implementation
-        // You'll need to adapt this to parse your actual schema format
-        
-        // For now, we return a dummy map
-        // In a real implementation, you would parse the schema bytes to extract field metadata
-        HashMap::new()
+        let mut field_order = HashMap::new();
+        for (name, _, id) in &schema.fields {
+            field_order.insert(name.clone(), *id);
+        }
+        field_order
     }
     
     /// Calculate MD5 hash of data
@@ -192,14 +205,6 @@ impl BondEncoder {
     }
 }
 
-/// Add impl Clone for BondSchema if it doesn't exist
-impl Clone for BondSchema {
-    fn clone(&self) -> Self {
-        BondSchema {
-            bytes: self.bytes.clone(),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

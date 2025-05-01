@@ -174,6 +174,28 @@ extern "C" void* bond_ffi_marshal_row(const void* schema_bytes, size_t schema_le
                     ptr += slen; remain -= slen;
                     break;
                 }
+                case bond::BT_WSTRING: {
+                    std::cout << "Field is wstring remain:" << remain << std::endl;
+                    if (remain < 2) throw std::runtime_error("row too short for wstring len");
+                    uint16_t slen = ptr[0] | (ptr[1] << 8);  // Read length in code units
+                    ptr += 2; remain -= 2;
+                    
+                    // For UTF-16, each character is 2 bytes
+                    size_t byte_len = slen * 2;
+                    if (remain < byte_len) throw std::runtime_error("row too short for wstring bytes");
+                    
+                    // Create a u16string from the UTF-16LE encoded bytes
+                    std::u16string ws;
+                    ws.reserve(slen);
+                    for (size_t i = 0; i < slen; i++) {
+                        char16_t c = ptr[i*2] | (ptr[i*2+1] << 8);
+                        ws.push_back(c);
+                    }
+                    
+                    writer.Write(ws);
+                    ptr += byte_len; remain -= byte_len;
+                    break;
+                }
                 // Extend here for more Bond types as needed
                 default: {
                     std::cout << "Unsupported type id: " << static_cast<int>(f.type.id) << std::endl;
