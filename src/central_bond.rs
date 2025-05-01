@@ -1,6 +1,6 @@
 //use md5;
 
-use crate::{BondSchema as FfiBondSchema, BondRow as FfiBondRow};
+use crate::{BondRow as FfiBondRow, BondSchema as FfiBondSchema};
 
 /// Helper to encode UTF-8 Rust str to UTF-16LE bytes
 fn utf8_to_utf16le_bytes(s: &str) -> Vec<u8> {
@@ -74,12 +74,11 @@ impl CentralBondBlob {
 
             // MODIFIED: Add the Simple Protocol header before the row data
             let row_bytes = event.row.as_bytes();
-            
+
             // Create a new buffer with the SP header
             let mut modified_row = Vec::with_capacity(row_bytes.len() + 4);
             modified_row.extend_from_slice(&[0x53, 0x50, 0x01, 0x00]); // Simple Protocol header
             modified_row.extend_from_slice(row_bytes);
-
 
             // row (len, bytes)
             //let row_bytes = event.row.as_bytes();
@@ -89,8 +88,6 @@ impl CentralBondBlob {
             // Write the length followed by the modified row
             buf.extend_from_slice(&(modified_row.len() as u32).to_le_bytes());
             buf.extend_from_slice(&modified_row);
-
-
 
             buf.extend_from_slice(&TERMINATOR.to_le_bytes());
         }
@@ -103,7 +100,7 @@ impl CentralBondBlob {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BondSchema, BondRow};
+    use crate::{BondRow, BondSchema};
     use md5;
 
     //Helper to calculate MD5 hash, returns [u8;16]
@@ -122,32 +119,33 @@ mod tests {
         let schema_bytes = schema_obj.as_bytes().to_vec();
         let schema_md5 = md5_bytes(&schema_bytes);
         let schema_id = 1234u64;
-    
+
         let schema = CentralSchemaEntry {
             id: schema_id,
             md5: schema_md5,
             schema: schema_obj,
         };
-    
+
         // Prepare a row
         let mut row = Vec::new();
         row.extend_from_slice(&42i32.to_le_bytes());
         let s = "hello";
         row.extend_from_slice(&(s.len() as u32).to_le_bytes()); // Bond expects u32 LE for string length
         row.extend_from_slice(s.as_bytes());
-    
+
         let row_obj = BondRow::from_schema_and_row(&schema.schema, &row);
-    
+
         let event = CentralEventEntry {
             schema_id,
             level: 0, // e.g. ETW verbose
             event_name: "eventname".to_string(),
             row: row_obj,
         };
-    
+
         // Metadata
-        let metadata = "namespace=testNamespace/eventVersion=Ver1v0/tenant=T/role=R/roleinstance=RI";
-    
+        let metadata =
+            "namespace=testNamespace/eventVersion=Ver1v0/tenant=T/role=R/roleinstance=RI";
+
         // Build blob
         let blob = CentralBondBlob {
             version: 1,
@@ -156,9 +154,9 @@ mod tests {
             schemas: vec![schema],
             events: vec![event],
         };
-    
+
         let payload = blob.to_bytes();
-    
+
         // Only assert that the payload is created and non-empty
         assert!(!payload.is_empty());
     }

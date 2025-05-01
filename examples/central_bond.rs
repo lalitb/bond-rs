@@ -1,5 +1,5 @@
-use bond_rs::{BondSchema, BondRow};
-use bond_rs::central_bond::{CentralBondBlob, CentralSchemaEntry, CentralEventEntry};
+use bond_rs::central_bond::{CentralBondBlob, CentralEventEntry, CentralSchemaEntry};
+use bond_rs::{BondRow, BondSchema};
 use std::fs::File;
 use std::io::Write;
 
@@ -55,7 +55,7 @@ fn main() {
 
     let event = CentralEventEntry {
         schema_id,
-        level: 1, // or 0 if you want
+        level: 1,                           // or 0 if you want
         event_name: "basename".to_string(), // matches C++ eventName
         row: row_obj,
     };

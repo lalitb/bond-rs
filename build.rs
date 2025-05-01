@@ -1,7 +1,8 @@
 use std::env;
 
 fn main() {
-    let bond_include = env::var("BOND_INCLUDE_DIR").unwrap_or_else(|_| "/usr/local/include".to_string());
+    let bond_include =
+        env::var("BOND_INCLUDE_DIR").unwrap_or_else(|_| "/usr/local/include".to_string());
     let bond_lib = env::var("BOND_LIB_DIR").unwrap_or_else(|_| "/usr/local/lib".to_string());
 
     cc::Build::new()

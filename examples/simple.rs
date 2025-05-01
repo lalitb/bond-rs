@@ -1,4 +1,4 @@
-use bond_rs::{BondSchema, BondRow};
+use bond_rs::{BondRow, BondSchema};
 
 fn main() {
     // Example schema: FloatCol (double, id=1), Level (int32, id=2)
@@ -12,6 +12,14 @@ fn main() {
     let bond_row = BondRow::from_schema_and_row(&schema, &row);
 
     // Use the schema and row Bond blobs as needed (e.g., send to another service, write to disk, etc.)
-    println!("Bond schema blob ({} bytes): {:x?}", schema.as_bytes().len(), schema.as_bytes());
-    println!("Bond row blob ({} bytes): {:x?}", bond_row.as_bytes().len(), bond_row.as_bytes());
+    println!(
+        "Bond schema blob ({} bytes): {:x?}",
+        schema.as_bytes().len(),
+        schema.as_bytes()
+    );
+    println!(
+        "Bond row blob ({} bytes): {:x?}",
+        bond_row.as_bytes().len(),
+        bond_row.as_bytes()
+    );
 }

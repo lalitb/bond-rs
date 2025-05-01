@@ -1,6 +1,6 @@
-mod ffi;
 pub mod central_bond;
 pub mod encoder;
+mod ffi;
 
 use std::slice;
 
@@ -43,7 +43,10 @@ impl BondSchema {
             ffi::bond_ffi_free(ptr);
             v
         };
-        let fields = fields.iter().map(|(name, typ, id)| (name.to_string(), *typ, *id)).collect();
+        let fields = fields
+            .iter()
+            .map(|(name, typ, id)| (name.to_string(), *typ, *id))
+            .collect();
         BondSchema { bytes, fields }
     }
 
@@ -61,7 +64,7 @@ impl BondRow {
                 schema.bytes.len(),
                 row.as_ptr() as *const _,
                 row.len(),
-                &mut out_len
+                &mut out_len,
             )
         };
         assert!(!ptr.is_null());
@@ -85,8 +88,8 @@ mod tests {
     #[test]
     fn test_bond_schema_from_fields() {
         let fields = &[
-            ("foo", 16u8, 1u16),    // BT_INT32 = 16
-            ("bar", 9u8, 2u16),     // BT_STRING = 9
+            ("foo", 16u8, 1u16), // BT_INT32 = 16
+            ("bar", 9u8, 2u16),  // BT_STRING = 9
         ];
         let schema = BondSchema::from_fields(fields);
         // Should not be empty
@@ -98,17 +101,17 @@ mod tests {
     #[test]
     fn test_bond_row_from_schema_and_row() {
         let fields = &[
-            ("foo", 16u8, 1u16),    // BT_INT32 = 16
-            ("bar", 9u8, 2u16),     // BT_STRING = 9
+            ("foo", 16u8, 1u16), // BT_INT32 = 16
+            ("bar", 9u8, 2u16),  // BT_STRING = 9
         ];
         let schema = BondSchema::from_fields(fields);
 
         // Compose a row: foo = 42i32; bar = "hello"
         let mut row = Vec::new();
-        row.extend_from_slice(&42i32.to_le_bytes());     // foo
+        row.extend_from_slice(&42i32.to_le_bytes()); // foo
         let s = "hello";
         row.extend_from_slice(&(s.len() as u16).to_le_bytes()); // bar string length (u16 LE)
-        row.extend_from_slice(s.as_bytes());                    // bar string bytes
+        row.extend_from_slice(s.as_bytes()); // bar string bytes
 
         let bond_row = BondRow::from_schema_and_row(&schema, &row);
         assert!(!bond_row.bytes.is_empty());

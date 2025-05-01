@@ -1,37 +1,45 @@
-use std::collections::HashMap;
+use bond_rs::encoder::{BondEncoder, BondField};
 use std::fs::File;
 use std::io::Write;
-use bond_rs::encoder::{BondEncoder, BondValue};
 
 fn main() {
     // Create a new Bond encoder
     let mut encoder = BondEncoder::new();
-    
-    // Create data using a simple HashMap
-    let mut data = HashMap::new();
-    data.insert("FloatCol".to_string(), BondValue::Float(3.1415));
-    data.insert("IntCol".to_string(), BondValue::Int32(42));
-    data.insert("StrCol".to_string(), BondValue::String("hello".to_string()));
-    
+
+    // OPTION 1: Using field array (most efficient)
+    let fields = [
+        BondField::float("FloatCol", 3.1415),
+        BondField::int32("IntCol", 42),
+        BondField::string("StrCol", "hello"),
+    ];
+
     // Metadata
     let metadata = "namespace=testNamespace/eventVersion=Ver1v0/tenant=T/role=R/roleinstance=RI";
-    
+
     // Encode the data into a Bond blob
-    let payload = encoder.encode(&data, "basename", 1, metadata);
-    
+    let payload = encoder.encode(&fields, "basename", 1, metadata);
+
+    // OPTION 2: Using builder pattern (more ergonomic)
+    let _payload2 = encoder
+        .builder()
+        .add_float("FloatCol", 3.1415)
+        .add_int32("IntCol", 42)
+        .add_string("StrCol", "hello")
+        .build("basename", 1, metadata);
+
     // Write to file
     File::create("/tmp/rust_central_bond_blob_simple.uncompressed")
         .unwrap()
         .write_all(&payload)
         .unwrap();
-    
+
     // LZ4 compress and save
     let compressed = lz4_chunked_compress(&payload);
     File::create("/tmp/rust_central_bond_blob_simple.lz4")
         .unwrap()
         .write_all(&compressed)
         .unwrap();
-    
+
     println!(
         "Wrote /tmp/rust_central_bond_blob_simple.uncompressed ({} bytes) and .lz4 ({} bytes)",
         payload.len(),

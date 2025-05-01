@@ -14,4 +14,5 @@ lz4_flex = "0.11.0"
 
 [dependencies]
 md5 = "0.7.0"
+smallvec = "1.15.0"
 # No extra dependencies needed for FFI itself

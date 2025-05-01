@@ -1,5 +1,5 @@
-use bond_rs::{BondSchema, BondRow};
-use bond_rs::central_bond::{CentralBondBlob, CentralSchemaEntry, CentralEventEntry};
+use bond_rs::central_bond::{CentralBondBlob, CentralEventEntry, CentralSchemaEntry};
+use bond_rs::{BondRow, BondSchema};
 use std::fs::File;
 use std::io::Write;
 
@@ -28,15 +28,14 @@ fn lz4_chunked_compress(input: &[u8]) -> Vec<u8> {
     output
 }
 
-
 fn main() {
     // 1. Build the schema: multiple fields
     // Example: FloatCol (float32), IntCol (int32), StrCol (string)
     // Bond type ids: BT_FLOAT = 7, BT_INT32 = 16, BT_STRING = 9
     let fields = &[
-        ("FloatCol", 8u8, 1u16),   // float
-        ("IntCol",   16u8, 2u16),  // int32
-        ("StrCol",   9u8, 3u16),   // string
+        ("FloatCol", 8u8, 1u16), // float
+        ("IntCol", 16u8, 2u16),  // int32
+        ("StrCol", 9u8, 3u16),   // string
     ];
     let schema_obj = BondSchema::from_fields(fields);
     let schema_bytes = schema_obj.as_bytes().to_vec();
@@ -52,10 +51,10 @@ fn main() {
     // 2. Build the row with multiple values (must match schema order/types exactly)
     let mut row = Vec::new();
     row.extend_from_slice(&3.1415f64.to_le_bytes()); // FloatCol (float32)
-    row.extend_from_slice(&42i32.to_le_bytes());     // IntCol (int32)
+    row.extend_from_slice(&42i32.to_le_bytes()); // IntCol (int32)
     let s = "hello";
     row.extend_from_slice(&(s.len() as u16).to_le_bytes()); // StrCol: string length (u16 LE)
-    row.extend_from_slice(s.as_bytes());                    // StrCol: string bytes
+    row.extend_from_slice(s.as_bytes()); // StrCol: string bytes
 
     let row_obj = BondRow::from_schema_and_row(&schema.schema, &row);
 
