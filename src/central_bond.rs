@@ -46,7 +46,6 @@ const TERMINATOR: u64 = 0xdeadc0dedeadc0de;
 
 /// CentralBondBlob Protocol Payload Structure
 ///
-/// This document describes the structure and encoding of the `CentralBondBlob` protocol payload.
 /// The payload consists of a header, metadata, schemas, and events, each encoded in a specific format.
 /// The central terminator constant used throughout is `TERMINATOR = 0xdeadc0dedeadc0de`.
 ///
