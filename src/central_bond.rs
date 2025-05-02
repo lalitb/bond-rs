@@ -44,6 +44,45 @@ pub struct CentralBondBlob {
 
 const TERMINATOR: u64 = 0xdeadc0dedeadc0de;
 
+/// CentralBondBlob Protocol Payload Structure
+///
+/// This document describes the structure and encoding of the `CentralBondBlob` protocol payload.
+/// The payload consists of a header, metadata, schemas, and events, each encoded in a specific format.
+/// The central terminator constant used throughout is `TERMINATOR = 0xdeadc0dedeadc0de`.
+///
+/// ## Payload Structure
+///
+/// ### Header
+/// - **Version**: `u32` (4 bytes)
+/// - **Format**: `u32` (4 bytes)
+///
+/// ### Metadata
+/// - **Length**: `u32` (4 bytes, prefix for UTF-16LE encoded metadata)
+/// - **Metadata**: UTF-16LE encoded string (variable length)
+///
+/// ### Schemas
+/// A collection of schema entries, each encoded as follows:
+/// - **Entity Type**: `u16` (2 bytes, value = 0)
+/// - **Schema ID**: `u64` (8 bytes, unique identifier)
+/// - **MD5 Hash**: `[u8; 16]` (16 bytes, MD5 checksum of schema bytes)
+/// - **Schema Length**: `u32` (4 bytes)
+/// - **Schema Bytes**: `Vec<u8>` (variable length, schema serialized as bytes)
+/// - **Terminator**: `u64` (8 bytes, constant `TERMINATOR`)
+///
+/// ### Events
+/// A collection of event entries, each encoded as follows:
+/// - **Entity Type**: `u16` (2 bytes, value = 2)
+/// - **Schema ID**: `u64` (8 bytes, links the event to a schema)
+/// - **Level**: `u8` (1 byte, event verbosity or severity level)
+/// - **Event Name Length**: `u16` (2 bytes, prefix for UTF-16LE encoded event name)
+/// - **Event Name**: UTF-16LE encoded string (variable length)
+/// - **Row Length**: `u32` (4 bytes, prefix for row data including `Simple Protocol` header)
+/// - **Row Data**:
+///   - **Simple Protocol Header**: `[0x53, 0x50, 0x01, 0x00]` (4 bytes)
+///   - **Row Bytes**: `Vec<u8>` (variable length, row serialized as bytes)
+/// - **Terminator**: `u64` (8 bytes, constant `TERMINATOR`)
+///
+
 impl CentralBondBlob {
     pub fn to_bytes(&self) -> Vec<u8> {
         // Estimate buffer size:
