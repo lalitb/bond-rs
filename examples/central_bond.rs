@@ -8,11 +8,6 @@ fn md5_bytes(data: &[u8]) -> [u8; 16] {
     md5::compute(data).0
 }
 
-// Helper: encode "eventname" as UTF-16LE
-//fn utf8_to_utf16le_bytes(s: &str) -> Vec<u8> {
-//    s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect()
-//}
-
 // LZ4 chunked compressor (64 KiB chunks)
 fn lz4_chunked_compress(input: &[u8]) -> Vec<u8> {
     use lz4_flex::block::compress_into;

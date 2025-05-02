@@ -4,7 +4,14 @@ use crate::{BondRow as FfiBondRow, BondSchema as FfiBondSchema};
 
 /// Helper to encode UTF-8 Rust str to UTF-16LE bytes
 fn utf8_to_utf16le_bytes(s: &str) -> Vec<u8> {
-    s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect()
+    // Each UTF-16 code unit is 2 bytes. For ASCII strings, the UTF-16 representation
+    // will be twice as large as UTF-8. For non-ASCII strings, UTF-16 may be more compact
+    // than UTF-8 in some cases, but to avoid reallocations we preallocate 2x len.
+    let mut buf = Vec::with_capacity(s.len() * 2);
+    for u in s.encode_utf16() {
+        buf.extend_from_slice(&u.to_le_bytes());
+    }
+    buf
 }
 
 /// Helper to calculate MD5 hash, returns [u8;16]
@@ -39,16 +46,61 @@ const TERMINATOR: u64 = 0xdeadc0dedeadc0de;
 
 impl CentralBondBlob {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
+        // Estimate buffer size:
+        // - Header: 4 (version) + 4 (format)
+        // - Metadata: 4 (length prefix) + metadata_utf16.len()
+        // - Each schema:
+        //     2 (entity type, u16)
+        //   + 8 (schema id, u64)
+        //   + 16 (md5, [u8;16])
+        //   + 4 (schema bytes length, u32)
+        //   + schema_bytes.len()
+        //   + 8 (terminator, u64)
+        // - Each event:
+        //     2 (entity type, u16)
+        //   + 8 (schema_id, u64)
+        //   + 1 (level, u8)
+        //   + 2 (event name length, u16)
+        //   + event_name_utf16.len()
+        //   + 4 (row length, u32)
+        //   + 4 (Simple Protocol header)
+        //   + row_bytes.len()
+        //   + 8 (terminator, u64)
+        let meta_utf16 = utf8_to_utf16le_bytes(&self.metadata);
+        let events_with_utf16 = self
+            .events
+            .iter()
+            .map(|e| {
+                let evname_utf16 = utf8_to_utf16le_bytes(&e.event_name);
+                (e, evname_utf16)
+            })
+            .collect::<Vec<_>>();
+        let mut estimated_size = 8 + 4 + meta_utf16.len();
+        estimated_size += self
+            .schemas
+            .iter()
+            .map(|s| 2 + 8 + 16 + 4 + s.schema.as_bytes().len() + 8)
+            .sum::<usize>();
+        estimated_size += events_with_utf16
+            .iter()
+            .map(|(e, evname_utf16)| {
+                let row_len = {
+                    let row_bytes = e.row.as_bytes();
+                    4 + row_bytes.len() // SP header (4), row_bytes
+                };
+                2 + 8 + 1 + 2 + evname_utf16.len() + row_len + 8
+            })
+            .sum::<usize>();
+
+        let mut buf = Vec::with_capacity(estimated_size);
 
         // HEADER
         buf.extend_from_slice(&self.version.to_le_bytes());
         buf.extend_from_slice(&self.format.to_le_bytes());
 
         // METADATA (len, UTF-16LE bytes)
-        let metadata_utf16 = utf8_to_utf16le_bytes(&self.metadata);
-        buf.extend_from_slice(&(metadata_utf16.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&metadata_utf16);
+        buf.extend_from_slice(&(meta_utf16.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&meta_utf16);
 
         // SCHEMAS (type 0)
         for schema in &self.schemas {
@@ -62,17 +114,16 @@ impl CentralBondBlob {
         }
 
         // EVENTS (type 2)
-        for event in &self.events {
+        for (event, evname_utf16) in events_with_utf16 {
             buf.extend_from_slice(&2u16.to_le_bytes()); // entity type 2
             buf.extend_from_slice(&event.schema_id.to_le_bytes());
             buf.push(event.level);
 
             // event name (UTF-16LE, prefixed with u16 len in bytes)
-            let evname_utf16 = utf8_to_utf16le_bytes(&event.event_name);
             buf.extend_from_slice(&(evname_utf16.len() as u16).to_le_bytes());
             buf.extend_from_slice(&evname_utf16);
 
-            // MODIFIED: Add the Simple Protocol header before the row data
+            // Add the Simple Protocol header before the row data
             let row_bytes = event.row.as_bytes();
 
             // Create a new buffer with the SP header
@@ -81,11 +132,6 @@ impl CentralBondBlob {
             modified_row.extend_from_slice(row_bytes);
 
             // row (len, bytes)
-            //let row_bytes = event.row.as_bytes();
-            //buf.extend_from_slice(&(row_bytes.len() as u32).to_le_bytes());
-            //buf.extend_from_slice(row_bytes);
-
-            // Write the length followed by the modified row
             buf.extend_from_slice(&(modified_row.len() as u32).to_le_bytes());
             buf.extend_from_slice(&modified_row);
 

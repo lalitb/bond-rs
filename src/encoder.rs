@@ -3,6 +3,7 @@ use crate::{BondRow, BondSchema};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// Supported value types for the Bond encoder
 #[derive(Debug, Clone)]
@@ -32,20 +33,28 @@ impl<'a> BondValue<'a> {
     /// Write the value bytes to a buffer
     fn write_to_buffer(&self, buffer: &mut Vec<u8>) {
         match self {
-            BondValue::Float(v) => buffer.extend_from_slice(&v.to_le_bytes()),
-            BondValue::Int32(v) => buffer.extend_from_slice(&v.to_le_bytes()),
-            BondValue::String(v) => {
-                buffer.extend_from_slice(&(v.len() as u16).to_le_bytes());
-                buffer.extend_from_slice(v.as_bytes());
+            BondValue::Float(v) => {
+                let bytes = v.to_le_bytes();
+                buffer.extend_from_slice(&bytes);
             }
-            BondValue::Double(v) => buffer.extend_from_slice(&v.to_le_bytes()),
+            BondValue::Int32(v) => {
+                let bytes = v.to_le_bytes();
+                buffer.extend_from_slice(&bytes)
+            }
+            BondValue::Double(v) => {
+                let bytes = v.to_le_bytes();
+                buffer.extend_from_slice(&bytes);
+            }
+            BondValue::String(v) => {
+                let utf8 = v.as_bytes();
+                buffer.extend_from_slice(&(utf8.len() as u32).to_le_bytes());
+                buffer.extend_from_slice(utf8);
+            }
             BondValue::WString(v) => {
                 // Convert UTF-8 to UTF-16
                 let utf16: Vec<u16> = v.encode_utf16().collect();
-
                 // Write length of UTF-16 string (in code units, not bytes)
                 buffer.extend_from_slice(&(utf16.len() as u16).to_le_bytes());
-
                 // Write UTF-16LE bytes
                 for code_unit in utf16 {
                     buffer.extend_from_slice(&code_unit.to_le_bytes());
@@ -228,25 +237,21 @@ struct FieldOrdering {
 
 /// The main Bond encoder struct
 pub struct BondEncoder {
-    schema_cache: HashMap<u64, BondSchema>,
-    ordering_cache: HashMap<u64, FieldOrdering>,
-    row_buffer: Vec<u8>,
-    tmp_buffer: Vec<u8>,
+    schema_cache: Arc<RwLock<HashMap<u64, BondSchema>>>,
+    ordering_cache: Arc<RwLock<HashMap<u64, FieldOrdering>>>,
 }
 
 impl BondEncoder {
     pub fn new() -> Self {
         BondEncoder {
-            schema_cache: HashMap::new(),
-            ordering_cache: HashMap::new(),
-            row_buffer: Vec::with_capacity(512),
-            tmp_buffer: Vec::with_capacity(512),
+            schema_cache: Arc::new(RwLock::new(HashMap::new())),
+            ordering_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// Create a Bond blob from a simple key-value map
     pub fn encode<'a>(
-        &mut self,
+        &self,
         fields: &[BondField<'a>],
         event_name: &str,
         level: u8,
@@ -256,10 +261,13 @@ impl BondEncoder {
         let (schema_id, schema_entry) = self.create_schema_from_fields(fields);
 
         // 2. Create a row from the fields
-        self.row_buffer.clear();
+        let mut row_buffer = Vec::with_capacity(512);
 
         // Get cached field ordering
-        let field_ordering = self.ordering_cache.get(&schema_id).unwrap();
+        let field_ordering = {
+            let ordering_map = self.ordering_cache.read().unwrap();
+            ordering_map.get(&schema_id).unwrap().ordered_fields.clone()
+        };
         // Build a map for quick field lookup by name
         let mut field_map = HashMap::with_capacity(fields.len());
         for field in fields {
@@ -267,13 +275,13 @@ impl BondEncoder {
         }
 
         // Write values in schema order
-        for (field_name, _) in &field_ordering.ordered_fields {
+        for (field_name, _) in &field_ordering {
             if let Some(value) = field_map.get(field_name.as_str()) {
-                value.write_to_buffer(&mut self.row_buffer);
+                value.write_to_buffer(&mut row_buffer);
             }
         }
 
-        let row_obj = BondRow::from_schema_and_row(&schema_entry.schema, &self.row_buffer);
+        let row_obj = BondRow::from_schema_and_row(&schema_entry.schema, &row_buffer);
 
         // 3. Create event entry
         let event = CentralEventEntry {
@@ -297,10 +305,7 @@ impl BondEncoder {
     }
 
     /// Create or retrieve a schema for the given data
-    fn create_schema_from_fields<'a>(
-        &mut self,
-        fields: &[BondField<'a>],
-    ) -> (u64, CentralSchemaEntry) {
+    fn create_schema_from_fields<'a>(&self, fields: &[BondField<'a>]) -> (u64, CentralSchemaEntry) {
         // Create a stable order for fields - use SmallVec to avoid allocations for small field sets
         let mut field_defs = SmallVec::<[(&str, u8, u16); 16]>::with_capacity(fields.len());
 
@@ -319,8 +324,8 @@ impl BondEncoder {
         // Calculate a hash for the schema
         let schema_id = self.calculate_schema_id(&field_defs);
 
-        // Check if we have this schema cached
-        if let Some(schema) = self.schema_cache.get(&schema_id) {
+        // 1. Try schema cache
+        if let Some(schema) = self.schema_cache.read().unwrap().get(&schema_id).cloned() {
             let schema_bytes = schema.as_bytes(); // Using as_bytes() which was in the original code
             let schema_md5 = self.md5_bytes(schema_bytes);
 
@@ -334,30 +339,32 @@ impl BondEncoder {
             );
         }
 
-        // Create a new schema
+        // 2. Create new schema and cache it (write lock)
         let schema = BondSchema::from_fields(&field_defs);
-
-        // Cache the schema
-        self.schema_cache.insert(schema_id, schema.clone());
-
-        // Create and cache field ordering for this schema
-        if !self.ordering_cache.contains_key(&schema_id) {
-            let mut ordering = FieldOrdering {
-                ordered_fields: Vec::with_capacity(fields.len()),
-            };
-
-            for (name, _, id) in &field_defs {
-                ordering.ordered_fields.push((name.to_string(), *id));
-            }
-
-            // Sort by field ID
-            ordering.ordered_fields.sort_by_key(|(_, id)| *id);
-            self.ordering_cache.insert(schema_id, ordering);
+        {
+            self.schema_cache
+                .write()
+                .unwrap()
+                .insert(schema_id, schema.clone());
         }
 
-        // Create the schema entry
-        self.tmp_buffer.clear();
-        // Get the schema bytes
+        // 3. Create and cache field ordering
+        let mut ordering = FieldOrdering {
+            ordered_fields: Vec::with_capacity(fields.len()),
+        };
+        for (name, _, id) in &field_defs {
+            ordering.ordered_fields.push((name.to_string(), *id));
+        }
+        ordering.ordered_fields.sort_by_key(|(_, id)| *id);
+        {
+            self.ordering_cache
+                .write()
+                .unwrap()
+                .entry(schema_id)
+                .or_insert(ordering);
+        }
+
+        // 4. Create schema entry
         let schema_bytes = schema.as_bytes(); // Using as_bytes() which was in the original code
         let schema_md5 = self.md5_bytes(schema_bytes);
 
@@ -393,19 +400,19 @@ impl BondEncoder {
 
     #[cfg(test)]
     pub fn schema_cache_size(&self) -> usize {
-        self.schema_cache.len()
+        self.schema_cache.read().unwrap().len()
     }
 }
 
 /// Builder for creating Bond events with fluent API
-pub struct BondEventBuilder<'a, 'e> {
-    encoder: &'e mut BondEncoder,
+pub struct BondEventBuilder<'a> {
+    encoder: Arc<BondEncoder>,
     fields: Vec<BondField<'a>>,
 }
 
-impl<'a, 'e> BondEventBuilder<'a, 'e> {
+impl<'a> BondEventBuilder<'a> {
     /// Create a new builder
-    pub fn new(encoder: &'e mut BondEncoder) -> Self {
+    pub fn new(encoder: Arc<BondEncoder>) -> Self {
         Self {
             encoder,
             fields: Vec::with_capacity(16),
@@ -456,9 +463,8 @@ impl<'a, 'e> BondEventBuilder<'a, 'e> {
 }
 
 impl BondEncoder {
-    /// Start building an event with fluent API
-    pub fn builder<'a, 'e>(&'e mut self) -> BondEventBuilder<'a, 'e> {
-        BondEventBuilder::new(self)
+    pub fn builder<'a>(self: &Arc<Self>) -> BondEventBuilder<'a> {
+        BondEventBuilder::new(self.clone())
     }
 }
 
@@ -468,7 +474,7 @@ mod tests {
 
     #[test]
     fn test_bond_encoder_with_fields() {
-        let mut encoder = BondEncoder::new();
+        let encoder = BondEncoder::new();
 
         let fields = [
             BondField::float("FloatCol", 3.1415),
@@ -485,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_bond_encoder_with_builder() {
-        let mut encoder = BondEncoder::new();
+        let encoder = Arc::new(BondEncoder::new());
 
         let payload = encoder
             .builder()
@@ -539,7 +545,7 @@ mod tests {
             BondField::int32("ExtraField", 99), // New field
         ];
 
-        let payload3 = encoder.encode(&fields3, "test_event", 1, metadata);
+        let _payload3 = encoder.encode(&fields3, "test_event", 1, metadata);
 
         // Schema cache should now have two entries
         assert_eq!(encoder.schema_cache_size(), 2);
@@ -551,7 +557,7 @@ mod tests {
             BondField::float("FloatCol", 3.1415), // Order changed
         ];
 
-        let payload4 = encoder.encode(&fields4, "test_event", 1, metadata);
+        let _payload4 = encoder.encode(&fields4, "test_event", 1, metadata);
 
         // Field order doesn't matter for schema ID calculation (it's based on sorted field names)
         // So we should still have just two schemas
@@ -565,7 +571,7 @@ mod tests {
             BondField::float("ExtraField", 3.14), // Same name as in fields3 but different type
         ];
 
-        let payload5 = encoder.encode(&fields5, "test_event", 1, metadata);
+        let _payload5 = encoder.encode(&fields5, "test_event", 1, metadata);
 
         // Schema cache should now have three entries
         assert_eq!(encoder.schema_cache_size(), 3);
@@ -573,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_ordering_cache() {
-        let mut encoder = BondEncoder::new();
+        let encoder = BondEncoder::new();
 
         // Create fields with specific order
         let fields = [

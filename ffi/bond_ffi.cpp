@@ -165,9 +165,9 @@ extern "C" void* bond_ffi_marshal_row(const void* schema_bytes, size_t schema_le
                 }
                 case bond::BT_STRING: {
                     std::cout << "Field is string remain:" <<  remain << std::endl;
-                    if (remain < 2) throw std::runtime_error("row too short for string len");
-                    uint16_t slen = ptr[0] | (ptr[1] << 8);
-                    ptr += 2; remain -= 2;
+                    if (remain < 4) throw std::runtime_error("row too short for string len");
+                    uint32_t slen = ptr[0] | (ptr[1] << 8) | (ptr[2] << 16) | (ptr[3] << 24);
+                    ptr += 4; remain -= 4;
                     if (remain < slen) throw std::runtime_error("row too short for string bytes");
                     std::string s(reinterpret_cast<const char*>(ptr), slen);
                     writer.Write(s);

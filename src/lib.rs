@@ -2,10 +2,11 @@ pub mod central_bond;
 pub mod encoder;
 mod ffi;
 
+use smallvec::SmallVec;
 use std::slice;
 
 pub struct BondSchema {
-    bytes: Vec<u8>,
+    bytes: SmallVec<[u8; 256]>,
     fields: Vec<(String, u8, u16)>, // (name, type, id)
 }
 
@@ -39,10 +40,17 @@ impl BondSchema {
         assert!(!ptr.is_null());
         let bytes = unsafe {
             let slice = slice::from_raw_parts(ptr as *const u8, out_len);
-            let v = slice.to_vec();
-            ffi::bond_ffi_free(ptr);
-            v
+            if out_len <= 256 {
+                let mut s = SmallVec::<[u8; 256]>::with_capacity(out_len);
+                s.extend_from_slice(slice);
+                s
+            } else {
+                SmallVec::from_vec(slice.to_vec())
+            }
         };
+        unsafe {
+            ffi::bond_ffi_free(ptr);
+        }
         let fields = fields
             .iter()
             .map(|(name, typ, id)| (name.to_string(), *typ, *id))
