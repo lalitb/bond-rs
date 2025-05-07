@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 use std::slice;
 
 pub struct BondSchema {
-    bytes: SmallVec<[u8; 256]>,
+    schema_result: *mut ffi::BondSchemaResult,
     fields: Vec<(String, u8, u16)>, // (name, type, id)
 }
 
@@ -16,9 +16,22 @@ pub struct BondRow {
 
 impl Clone for BondSchema {
     fn clone(&self) -> Self {
-        BondSchema {
-            bytes: self.bytes.clone(),
-            fields: self.fields.clone(),
+        BondSchema::from_fields(
+            &self
+                .fields
+                .iter()
+                .map(|(n, t, i)| (n.as_str(), *t, *i))
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
+impl Drop for BondSchema {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.schema_result.is_null() {
+                ffi::bond_ffi_free_schema_result(self.schema_result);
+            }
         }
     }
 }
@@ -34,32 +47,25 @@ impl BondSchema {
             buf.extend_from_slice(&id.to_le_bytes());
         }
         let mut out_len = 0usize;
-        let ptr = unsafe {
+        let schema_result = unsafe {
             ffi::bond_ffi_marshal_schema(buf.as_ptr() as *const _, buf.len(), &mut out_len)
         };
-        assert!(!ptr.is_null());
-        let bytes = unsafe {
-            let slice = slice::from_raw_parts(ptr as *const u8, out_len);
-            if out_len <= 256 {
-                let mut s = SmallVec::<[u8; 256]>::with_capacity(out_len);
-                s.extend_from_slice(slice);
-                s
-            } else {
-                SmallVec::from_vec(slice.to_vec())
-            }
-        };
-        unsafe {
-            ffi::bond_ffi_free(ptr);
-        }
+        assert!(!schema_result.is_null());
         let fields = fields
             .iter()
             .map(|(name, typ, id)| (name.to_string(), *typ, *id))
             .collect();
-        BondSchema { bytes, fields }
+        BondSchema {
+            schema_result,
+            fields,
+        }
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes
+        unsafe {
+            let schema = &*self.schema_result;
+            std::slice::from_raw_parts(schema.schema_bytes as *const u8, schema.schema_bytes_len)
+        }
     }
 }
 
@@ -67,9 +73,9 @@ impl BondRow {
     pub fn from_schema_and_row(schema: &BondSchema, row: &[u8]) -> Self {
         let mut out_len = 0usize;
         let ptr = unsafe {
+            let schema = &*schema.schema_result;
             ffi::bond_ffi_marshal_row(
-                schema.bytes.as_ptr() as *const _,
-                schema.bytes.len(),
+                schema.schema_ptr,
                 row.as_ptr() as *const _,
                 row.len(),
                 &mut out_len,
@@ -100,8 +106,6 @@ mod tests {
             ("bar", 9u8, 2u16),  // BT_STRING = 9
         ];
         let schema = BondSchema::from_fields(fields);
-        // Should not be empty
-        assert!(!schema.bytes.is_empty());
         // Should be accessible
         assert!(!schema.as_bytes().is_empty());
     }

@@ -67,19 +67,9 @@ std::vector<Field> parse_schema(const uint8_t* ptr, size_t len, size_t& out_coun
     return fields;
 }
 
-void* buffer_to_bytes(bond::OutputBuffer& buf, size_t* out_len) {
-    const bond::blob& blob = buf.GetBuffer();
-    size_t total_size = blob.size();
-    void* out = std::malloc(total_size);
-    if (!out && total_size) throw std::bad_alloc();
-    std::memcpy(out, blob.content(), total_size);
-    *out_len = total_size;
-    return out;
-}
-
 } // namespace
 
-extern "C" void* bond_ffi_marshal_schema(const void* schema_buf, size_t schema_len, size_t* out_len) {
+extern "C" BondSchemaResult* bond_ffi_marshal_schema(const void* schema_buf, size_t schema_len, size_t* out_len) {
     try {
         const uint8_t* ptr = reinterpret_cast<const uint8_t*>(schema_buf);
         size_t field_count;
@@ -100,41 +90,55 @@ extern "C" void* bond_ffi_marshal_schema(const void* schema_buf, size_t schema_l
             struct_def.fields.push_back(std::move(fd));
         }
 
-        bond::SchemaDef schemaDef;
-        schemaDef.root.id = bond::BT_STRUCT;
-        schemaDef.root.bonded_type = false;
-        schemaDef.structs.push_back(struct_def);
+         // Allocate schemaDef on heap
+         auto schemaDef = std::make_unique<bond::SchemaDef>();
+         schemaDef->root.id = bond::BT_STRUCT;
+         schemaDef->root.bonded_type = false;
+         schemaDef->structs.push_back(struct_def);
+ 
+         // Marshal to buffer
+         bond::OutputBuffer buf;
+         bond::SimpleBinaryWriter<bond::OutputBuffer> writer(buf);
+         bond::Marshal(*schemaDef, writer);
+ 
+         // Copy marshaled bytes
+         auto marshaled = buf.GetBuffer();
+         void* bytes = malloc(marshaled.size());        
+         if (!bytes && marshaled.size()) throw std::bad_alloc();
+         std::memcpy(bytes, marshaled.data(), marshaled.size());
+ 
+         // Create BondSchemaResult and fill fields
+         BondSchemaResult* result = new BondSchemaResult;
+         result->schema_bytes = bytes;
+         result->schema_bytes_len = marshaled.size();
+         result->schema_ptr = schemaDef.release();
+ 
+         *out_len = result->schema_bytes_len;
+         return result;
+     } catch (...) {
+         *out_len = 0;
+         return nullptr;
+     }
+ }
 
-        bond::OutputBuffer buf;
-        bond::SimpleBinaryWriter<bond::OutputBuffer> writer(buf);
-        bond::Marshal(schemaDef, writer);
-
-        return buffer_to_bytes(buf, out_len);
-    } catch (...) {
-        *out_len = 0;
-        return nullptr;
-    }
-}
-
-extern "C" void* bond_ffi_marshal_row(const void* schema_bytes, size_t schema_len,
+extern "C" void* bond_ffi_marshal_row(void* schema_ptr,
                                       const void* row_buf, size_t row_len,
                                       size_t* out_len) {
     try {
-        std::cout << "Marshalling row with schema length: " << schema_len << std::endl;
-        bond::InputBuffer input(reinterpret_cast<const char*>(schema_bytes), schema_len);
-        bond::SchemaDef schemaDef = bond::Unmarshal<bond::SchemaDef>(input);
-        if (schemaDef.structs.empty()) throw std::runtime_error("no struct in schema");
+        bond::SchemaDef* schemaDef = static_cast<bond::SchemaDef*>(schema_ptr);
+        if (!schemaDef || schemaDef->structs.empty())
+            throw std::runtime_error("invalid or empty schema");
 
-        const auto& fields = schemaDef.structs[0].fields;
+        const auto& fields = schemaDef->structs[0].fields;
         const uint8_t* ptr = reinterpret_cast<const uint8_t*>(row_buf);
         size_t remain = row_len;
 
         bond::OutputBuffer buf;
         bond::SimpleBinaryWriter<bond::OutputBuffer> writer(buf);
-        writer.WriteStructBegin(schemaDef.structs[0].metadata, false);
+        writer.WriteStructBegin(schemaDef->structs[0].metadata, false);
 
         for (const auto& f : fields) {
-            std::cout << "Processing field: " << f.metadata.name << "type" << f.type.id << std::endl;
+            std::cout << "Processing field: " << f.metadata.name << " type " << f.type.id << std::endl;
             switch (f.type.id) {
                 case bond::BT_DOUBLE: {
                     std::cout << "Field is double remain:" <<  remain << std::endl;
@@ -205,7 +209,13 @@ extern "C" void* bond_ffi_marshal_row(const void* schema_bytes, size_t schema_le
         }
         writer.WriteStructEnd();
 
-        return buffer_to_bytes(buf, out_len);
+        // Copy the Bond buffer directly to a malloc'd buffer
+        auto output = buf.GetBuffer();
+        *out_len = output.size();
+        void* out = malloc(*out_len);
+        if (!out && *out_len) throw std::bad_alloc();
+        std::memcpy(out, output.data(), *out_len);
+        return out;    
     } catch (...) {
         *out_len = 0;
         return nullptr;
@@ -214,4 +224,13 @@ extern "C" void* bond_ffi_marshal_row(const void* schema_bytes, size_t schema_le
 
 extern "C" void bond_ffi_free(void* ptr) {
     std::free(ptr);
+}
+
+
+extern "C" void bond_ffi_free_schema_result(BondSchemaResult* result) {
+    if (result) {
+        if (result->schema_bytes) free(result->schema_bytes);
+        delete static_cast<bond::SchemaDef*>(result->schema_ptr);
+        delete result;
+    }
 }

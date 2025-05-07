@@ -25,7 +25,7 @@ fn main() {
         .builder()
         .add_float("FloatCol", 6.1415)
         .add_int32("IntCol", 45)
-        .add_string("StrCol", "hello world")
+        .add_string("StrCol", "hello world 123")
         .build("basename", 1, metadata);
 
     // Write to file
